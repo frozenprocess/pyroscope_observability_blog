@@ -1,0 +1,65 @@
+agent:
+  mode: 'flow'
+  configMap:
+    create: true
+    content: |
+      discovery.kubernetes "all_pods" {
+        role = "pod"
+      }
+
+      discovery.relabel "calico_node_profiler" {
+        targets = concat(discovery.kubernetes.all_pods.targets)
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          action        = "keep"
+          regex         = "calico-(node|typha)"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_image"]
+          separator     = ":"
+          action        = "replace"
+          regex         = "^.*?:(v.*?)$"
+          target_label  = "version"
+        }
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name","version"]
+          separator     = ":"
+          action        = "replace"
+          target_label  = "__meta_kubernetes_pod_container_name"
+        }
+
+        rule {
+          source_labels = ["__address__"]
+          separator     = ":"
+          regex         = "^(.*?)(:.*?)?$"
+          action        = "replace"
+          replacement   = "$1:9096"
+          target_label  = "__address__"
+        }
+
+      }
+
+      discovery.relabel "calico_node_pprof_profiler" {
+        targets = concat(discovery.relabel.calico_node_profiler.output)
+
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          action        = "replace"
+          replacement   = "$1-pprof"
+          target_label  = "__meta_kubernetes_pod_container_name"
+        }
+      }
+
+      pyroscope.scrape "instance" {
+        forward_to = [pyroscope.write.endpoint.receiver]
+        targets = discovery.relabel.calico_node_pprof_profiler.output
+      }
+
+      pyroscope.write "endpoint" {
+        endpoint {
+          url = "http://pyroscope.calico-monitoring.svc.cluster.local.:4040"
+        }
+      }
